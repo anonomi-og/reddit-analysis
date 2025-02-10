@@ -1,0 +1,10 @@
+
+Build code
+docker build -t europe-west1-docker.pkg.dev/reddit-stalk-450411/reddit-analyzer-repo/reddit-analyzer:latest .
+
+Push
+docker push europe-west1-docker.pkg.dev/reddit-stalk-450411/reddit-analyzer-repo/reddit-analyzer:latest
+
+
+Run
+gcloud run deploy reddit-analyzer --image=europe-west1-docker.pkg.dev/reddit-stalk-450411/reddit-analyzer-repo/reddit-analyzer:latest --platform=managed --region=europe-west1 --allow-unauthenticated
