@@ -22,11 +22,13 @@ import secrets
 import flask
 import flask_session
 from werkzeug.middleware.proxy_fix import ProxyFix
+from google.cloud import firestore
+db = firestore.Client()
 
 
 
-print("Flask version:", flask.__version__)
-print("Flask-Session version:", flask_session.__version__)
+# print("Flask version:", flask.__version__)
+# print("Flask-Session version:", flask_session.__version__)
 
 load_dotenv()
 
@@ -104,7 +106,8 @@ def callback_handling():
         'name': userinfo.get('name'),
         'email': userinfo.get('email')
     }
-
+    # Log the login event
+    log_event("login", session['user']['email'])
     # Redirect to the dashboard instead of index
     return redirect(url_for("dashboard"))
 
@@ -130,6 +133,31 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "RedditUserAnalysisScript/0.1
 
 # --- OpenAI API Key ---
 openai.api_key = os.getenv("OPENAI_API_KEY")
+
+def log_event(event_type, user_email, reddit_username=None):
+    # event_type can be 'login' or 'usage'
+    doc = {
+        'user_email': user_email,
+        'event_type': event_type,
+        'timestamp': firestore.SERVER_TIMESTAMP,
+    }
+    if reddit_username:
+        doc['reddit_username'] = reddit_username
+    db.collection("events").add(doc)
+
+def get_today_usage_count(user_email):
+    # Get the start of the current UTC day
+    now = datetime.now(timezone.utc)
+    start_of_day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    
+    events_ref = db.collection("events")
+    query = (events_ref
+             .where("user_email", "==", user_email)
+             .where("event_type", "==", "usage")
+             .where("timestamp", ">=", start_of_day))
+    docs = query.stream()
+    count = sum(1 for _ in docs)
+    return count
 
 def clean_comment(text):
     """
@@ -290,7 +318,14 @@ def generate_comment_heatmap(comments):
 @app.route("/", methods=["GET", "POST"])
 @requires_auth
 def index():
+    user_email = session['user']['email']
     if request.method == "POST":
+        # Check usage count for today
+        count = get_today_usage_count(user_email)
+        if count >= 5:
+            flash("Daily usage limit reached. Please try again tomorrow.", "warning")
+            return redirect(url_for("dashboard"))
+            
         reddit_username = request.form.get("reddit_username", "").strip()
         print(f"[DEBUG] Received POST request with reddit_username='{reddit_username}'")
         if not reddit_username:
@@ -332,12 +367,16 @@ def index():
             "heatmap": heatmap_img,
             "location_guess": location_guess
         }
+        
+        # Log the usage event with the searched Reddit username
+        log_event("usage", user_email, reddit_username=reddit_username)
 
         print("[DEBUG] Final 'analysis' dict being sent to template:\n", json.dumps(analysis, indent=2)[:1000], "...\n")
         return render_template("result.html", analysis=analysis)
     
     print("[DEBUG] GET request on '/', rendering index.html.")
     return render_template("index.html")
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)), debug=False)
