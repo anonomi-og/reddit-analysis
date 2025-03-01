@@ -21,6 +21,23 @@
   </style>
 </head>
 <body class="bg-light">
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="/">Reddit Comment Analyzer</a>
+      <div class="d-flex">
+        {% if session.user %}
+          <span class="navbar-text me-3">
+            Welcome, {{ session.user.name }}
+          </span>
+          <a class="btn btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+          <a class="btn btn-outline-primary" href="{{ url_for('login') }}">Login</a>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+  
   <div class="container mt-5">
     <h1 class="mb-4">Analysis for Reddit User: {{ analysis.username }}</h1>
 
@@ -32,18 +49,15 @@
         {% if analysis.user_info %}
           <li class="list-group-item"><strong>Comment Karma:</strong> {{ analysis.user_info.comment_karma }}</li>
           <li class="list-group-item"><strong>Link Karma:</strong> {{ analysis.user_info.link_karma }}</li>
-          <li class="list-group-item"><strong>Post Count:</strong> {{ analysis.user_info.post_count }}</li>
-          <li class="list-group-item"><strong>Comment Count:</strong> {{ analysis.user_info.comment_count }}</li>
-          <li class="list-group-item">
-            <strong>Account Created:</strong> 
-            {{ analysis.user_info.account_created }} 
-            ({{ analysis.user_info.account_age_days }} days old)
-          </li>
+          {% if analysis.user_info.post_count %}
+            <li class="list-group-item"><strong>Post Count:</strong> {{ analysis.user_info.post_count }}</li>
+          {% endif %}
+          {% if analysis.user_info.comment_count %}
+            <li class="list-group-item"><strong>Comment Count:</strong> {{ analysis.user_info.comment_count }}</li>
+          {% endif %}
+          <li class="list-group-item"><strong>Account Created:</strong> {{ analysis.user_info.account_created }} ({{ analysis.user_info.account_age_days }} days old)</li>
           {% if analysis.user_info.public_description %}
-            <li class="list-group-item">
-              <strong>Public Profile Description:</strong> 
-              {{ analysis.user_info.public_description }}
-            </li>
+            <li class="list-group-item"><strong>Public Profile Description:</strong> {{ analysis.user_info.public_description }}</li>
           {% endif %}
         {% endif %}
       </ul>
@@ -124,12 +138,10 @@
           if (data && data.length > 0) {
             const lat = data[0].lat;
             const lon = data[0].lon;
-
             const map = L.map('locationMap').setView([lat, lon], 12);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
               attribution: '&copy; OpenStreetMap contributors'
             }).addTo(map);
-
             L.marker([lat, lon]).addTo(map)
               .bindPopup(userLocation)
               .openPopup();

@@ -10,38 +10,96 @@ import seaborn as sns
 import io
 import base64
 
-from flask import Flask, request, render_template, redirect, url_for, flash, Response
+from flask import Flask, request, render_template, redirect, url_for, flash, session
 from functools import wraps
 from dotenv import load_dotenv
 from datetime import datetime, timezone
+from urllib.parse import urlencode
+from flask_session import Session  # Import this at the top of your app.py
+# Import Auth0 client
+from authlib.integrations.flask_client import OAuth
+import secrets
+
+
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "default-secret-key")
 
-# --- Basic Authentication Setup ---
-APP_USERNAME = os.getenv("APP_USERNAME", "admin")
-APP_PASSWORD = os.getenv("APP_PASSWORD", "password")
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_TYPE"] = "filesystem"  # Store sessions in a temporary file
+Session(app)  # Initialize the session
 
-def check_auth(username, password):
-    return username == APP_USERNAME and password == APP_PASSWORD
+# --- Auth0 Configuration ---
+AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
+AUTH0_CLIENT_ID = os.getenv("AUTH0_CLIENT_ID")
+AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET")
+AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "http://localhost:8080/callback")
+AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE", f"https://{AUTH0_DOMAIN}/userinfo")
 
-def authenticate():
-    return Response(
-        'Could not verify your access level for that URL.\n'
-        'You have to login with proper credentials.', 401,
-        {'WWW-Authenticate': 'Basic realm="Login Required"'}
-    )
+# Initialize OAuth and register Auth0
+oauth = OAuth(app)
+auth0 = oauth.register(
+    'auth0',
+    client_id=AUTH0_CLIENT_ID,
+    client_secret=AUTH0_CLIENT_SECRET,
+    api_base_url=f'https://{AUTH0_DOMAIN}',
+    access_token_url=f'https://{AUTH0_DOMAIN}/oauth/token',
+    authorize_url=f'https://{AUTH0_DOMAIN}/authorize',
+    client_kwargs={
+        'scope': 'openid profile email',
+    },
+    server_metadata_url=f'https://{AUTH0_DOMAIN}/.well-known/openid-configuration'
+)
 
+
+# --- Session-based Authentication Decorator ---
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-         auth = request.authorization
-         if not auth or not check_auth(auth.username, auth.password):
-              return authenticate()
-         return f(*args, **kwargs)
+        if 'user' not in session:
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
     return decorated
+
+# --- Auth0 Routes ---
+@app.route("/login")
+def login():
+    # Generate a secure random state token and store it in the session.
+    state = secrets.token_urlsafe(16)
+    session["oauth_state"] = state
+    # Pass the state to Auth0
+    return auth0.authorize_redirect(redirect_uri=AUTH0_CALLBACK_URL, state=state)
+
+@app.route("/callback")
+def callback_handling():
+    # Retrieve the state from the query parameters and from the session.
+    state_from_response = request.args.get("state")
+    state_from_session = session.get("oauth_state")
+    
+    # If they don't match, log an error and abort.
+    if not state_from_session or state_from_response != state_from_session:
+        print("[ERROR] State mismatch: session state:", state_from_session, "response state:", state_from_response)
+        return "State mismatch error", 400
+
+    # If the state matches, proceed to get the token.
+    token = auth0.authorize_access_token()
+    resp = auth0.get('userinfo')
+    userinfo = resp.json()
+    session['user'] = {
+        'jwt_payload': userinfo,
+        'name': userinfo.get('name'),
+        'email': userinfo.get('email')
+    }
+    return redirect(url_for("index"))
+
+@app.route("/logout")
+def logout():
+    # Clear session and redirect to Auth0 logout endpoint
+    session.clear()
+    params = {'returnTo': url_for('index', _external=True), 'client_id': AUTH0_CLIENT_ID}
+    return redirect(auth0.api_base_url + '/v2/logout?' + urlencode(params))
 
 # --- Reddit API Credentials ---
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
@@ -100,7 +158,6 @@ def fetch_user_info(username):
         )
         redditor = reddit.redditor(username)
 
-        # Calculate readable account creation date
         created_utc = redditor.created_utc
         created_dt = datetime.fromtimestamp(created_utc, tz=timezone.utc)
         created_date_str = created_dt.strftime('%Y-%m-%d')
@@ -144,7 +201,7 @@ def build_prompt(user_info, comments):
         prompt += f"{idx}. {comment['body']}\n"
     prompt += "\nPlease ensure the output is valid JSON and nothing else."
     print("[DEBUG] Prompt being sent to LLM (truncated to 500 chars):")
-    print(prompt[:500], "...\n")  # prevent flooding console
+    print(prompt[:500], "...\n")
     return prompt
 
 def call_llm_analysis(prompt):
@@ -171,7 +228,6 @@ def call_llm_analysis(prompt):
     except Exception as e:
         print("[ERROR] Error calling LLM analysis:", e)
         generated_content = "Error calling LLM analysis."
-
     return generated_content
 
 def generate_comment_heatmap(comments):
@@ -208,13 +264,13 @@ def generate_comment_heatmap(comments):
         print("[ERROR] Error generating heatmap:", e)
         return None
 
+# --- Main App Route ---
 @app.route("/", methods=["GET", "POST"])
 @requires_auth
 def index():
     if request.method == "POST":
         reddit_username = request.form.get("reddit_username", "").strip()
         print(f"[DEBUG] Received POST request with reddit_username='{reddit_username}'")
-
         if not reddit_username:
             flash("Please enter a Reddit username.", "danger")
             return redirect(url_for("index"))
@@ -228,7 +284,6 @@ def index():
         prompt = build_prompt(user_info, comments)
         analysis_summary = call_llm_analysis(prompt)
 
-        # Attempt to parse JSON from LLM result
         location_guess = ""
         try:
             parsed_summary = json.loads(analysis_summary)
@@ -237,7 +292,6 @@ def index():
         except json.JSONDecodeError:
             print("[ERROR] Could not parse LLM JSON output")
         
-        # Build frequency data
         subreddit_counts = {}
         for comment in comments:
             sub = comment["subreddit"]
@@ -258,12 +312,10 @@ def index():
         }
 
         print("[DEBUG] Final 'analysis' dict being sent to template:\n", json.dumps(analysis, indent=2)[:1000], "...\n")
-
         return render_template("result.html", analysis=analysis)
     
-    # GET request => Show index
     print("[DEBUG] GET request on '/', rendering index.html.")
     return render_template("index.html")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 8080)), debug=False)

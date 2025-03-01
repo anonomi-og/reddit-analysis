@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard - Reddit Comment Analyzer</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-light bg-white shadow-sm mb-4">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="/">Reddit Comment Analyzer</a>
+      <div class="d-flex">
+        {% if session.user %}
+          <span class="navbar-text me-3">
+            Welcome, {{ session.user.name }}
+          </span>
+          <a class="btn btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
+        {% else %}
+          <a class="btn btn-outline-primary" href="{{ url_for('login') }}">Login</a>
+        {% endif %}
+      </div>
+    </div>
+  </nav>
+  
+  <!-- Main Container -->
+  <div class="container">
+    <h1 class="mb-4">Dashboard</h1>
+    
+    <!-- User Profile Card -->
+    <div class="card mb-4 shadow-sm">
+      <div class="card-body">
+        <h5 class="card-title">Your Profile</h5>
+        <p class="card-text">
+          <strong>Name:</strong> {{ session.user.name }}<br>
+          <strong>Email:</strong> {{ session.user.email }}
+        </p>
+      </div>
+    </div>
+    
+    <!-- Call to Action -->
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h5 class="card-title">Get Started</h5>
+        <p class="card-text">
+          Use our Reddit Comment Analyzer to gain insights into Reddit users' behavior.
+        </p>
+        <a href="{{ url_for('index') }}" class="btn btn-primary">Analyze a Reddit User</a>
+      </div>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
