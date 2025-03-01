@@ -27,9 +27,7 @@
       <a class="navbar-brand" href="/">Reddit Comment Analyzer</a>
       <div class="d-flex">
         {% if session.user %}
-          <span class="navbar-text me-3">
-            Welcome, {{ session.user.name }}
-          </span>
+          <a class="btn btn-outline-primary me-2" href="{{ url_for('dashboard') }}">Dashboard</a>
           <a class="btn btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
         {% else %}
           <a class="btn btn-outline-primary" href="{{ url_for('login') }}">Login</a>

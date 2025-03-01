@@ -78,7 +78,6 @@ def callback_handling():
     state_from_response = request.args.get("state")
     state_from_session = session.get("oauth_state")
     
-    # If they don't match, log an error and abort.
     if not state_from_session or state_from_response != state_from_session:
         print("[ERROR] State mismatch: session state:", state_from_session, "response state:", state_from_response)
         return "State mismatch error", 400
@@ -92,7 +91,10 @@ def callback_handling():
         'name': userinfo.get('name'),
         'email': userinfo.get('email')
     }
-    return redirect(url_for("index"))
+
+    # Redirect to the dashboard instead of index
+    return redirect(url_for("dashboard"))
+
 
 @app.route("/logout")
 def logout():
@@ -100,6 +102,13 @@ def logout():
     session.clear()
     params = {'returnTo': url_for('index', _external=True), 'client_id': AUTH0_CLIENT_ID}
     return redirect(auth0.api_base_url + '/v2/logout?' + urlencode(params))
+
+@app.route("/dashboard")
+@requires_auth
+def dashboard():
+    return render_template("dashboard.html")
+
+
 
 # --- Reddit API Credentials ---
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
