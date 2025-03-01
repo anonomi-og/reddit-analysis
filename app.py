@@ -19,16 +19,27 @@ from flask_session import Session  # Import this at the top of your app.py
 # Import Auth0 client
 from authlib.integrations.flask_client import OAuth
 import secrets
+import flask
+import flask_session
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 
+
+print("Flask version:", flask.__version__)
+print("Flask-Session version:", flask_session.__version__)
 
 load_dotenv()
 
 app = Flask(__name__)
+# Add this line for compatibility with flask-session
+app.session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "default-secret-key")
 
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"  # Store sessions in a temporary file
+app.config["PREFERRED_URL_SCHEME"] = "https"
+
 Session(app)  # Initialize the session
 
 # --- Auth0 Configuration ---
@@ -36,7 +47,7 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_CLIENT_ID = os.getenv("AUTH0_CLIENT_ID")
 AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET")
 # AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "http://localhost:8080/callback")   #local testing
-AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "https://reddit-analyzer-793334408726.europe-west1.run.app/callback")
+AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "https://reddit-analyzer-793334408726.europe-west1.run.app/callback")  #deployed
 
 AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE", f"https://{AUTH0_DOMAIN}/userinfo")
 
