@@ -27,6 +27,8 @@ db = firestore.Client()
 
 import tiktoken   # <‑‑ new
 
+
+
 MODEL = "gpt-3.5-turbo"   # keep a single source of truth
 enc = tiktoken.encoding_for_model(MODEL)
 
@@ -39,6 +41,11 @@ def tokens_in(text: str) -> int:
 # print("Flask-Session version:", flask_session.__version__)
 
 load_dotenv()
+
+ADMIN_EMAILS = set(e.strip().lower()
+                   for e in os.getenv("ADMIN_EMAILS", "").split(",")
+                   if e.strip())
+
 
 app = Flask(__name__)
 # Add this line for compatibility with flask-session
@@ -385,9 +392,12 @@ def index():
     if request.method == "POST":
         # Check usage count for today
         count = get_today_usage_count(user_email)
-        if count >= 5:
+
+        # Admins get unlimited (or set a higher number here)
+        if user_email.lower() not in ADMIN_EMAILS and count >= 5:
             flash("Daily usage limit reached. Please try again tomorrow.", "warning")
             return redirect(url_for("dashboard"))
+
             
         user_input = request.form.get("reddit_username", "").strip()
         print(f"[DEBUG] Received POST request with user_input='{user_input}'")
