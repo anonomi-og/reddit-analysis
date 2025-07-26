@@ -167,6 +167,19 @@ def clean_comment(text):
     text = re.sub(r'http\S+', '', text)
     return text.strip()
 
+def extract_username_from_input(user_input):
+    """
+    Extracts a Reddit username from a direct username string or a Reddit URL.
+    Handles URLs like:
+    - https://www.reddit.com/u/username
+    - https://www.reddit.com/user/username/
+    - https://www.reddit.com/u/Trycheesecake/s/nM7PkcnmP5
+    """
+    match = re.search(r'reddit\.com/(?:u|user)/([^/]+)', user_input)
+    if match:
+        return match.group(1)
+    return user_input
+
 def fetch_comments(username, limit=150, min_length=10):
     """
     Fetch the last `limit` comments for a given Reddit username.
@@ -326,10 +339,14 @@ def index():
             flash("Daily usage limit reached. Please try again tomorrow.", "warning")
             return redirect(url_for("dashboard"))
             
-        reddit_username = request.form.get("reddit_username", "").strip()
-        print(f"[DEBUG] Received POST request with reddit_username='{reddit_username}'")
+        user_input = request.form.get("reddit_username", "").strip()
+        print(f"[DEBUG] Received POST request with user_input='{user_input}'")
+
+        reddit_username = extract_username_from_input(user_input)
+        print(f"[DEBUG] Extracted reddit_username='{reddit_username}'")
+
         if not reddit_username:
-            flash("Please enter a Reddit username.", "danger")
+            flash("Please enter a Reddit username or a valid profile URL.", "danger")
             return redirect(url_for("index"))
         
         user_info = fetch_user_info(reddit_username)
