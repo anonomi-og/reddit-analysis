@@ -25,6 +25,14 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from google.cloud import firestore
 db = firestore.Client()
 
+import tiktoken   # <‑‑ new
+
+MODEL = "gpt-3.5-turbo"   # keep a single source of truth
+enc = tiktoken.encoding_for_model(MODEL)
+
+def tokens_in(text: str) -> int:
+    """Return how many tokens `text` will use with the chosen model."""
+    return len(enc.encode(text))
 
 
 # print("Flask version:", flask.__version__)
@@ -48,6 +56,7 @@ Session(app)  # Initialize the session
 AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_CLIENT_ID = os.getenv("AUTH0_CLIENT_ID")
 AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET")
+
 # AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "http://localhost:8080/callback")   #local testing
 AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "https://reddit-analyzer-793334408726.europe-west1.run.app/callback")  #deployed
 
@@ -134,6 +143,48 @@ REDDIT_USER_AGENT = os.getenv("REDDIT_USER_AGENT", "RedditUserAnalysisScript/0.1
 # --- OpenAI API Key ---
 openai.api_key = os.getenv("OPENAI_API_KEY")
 
+def collect_comments_within_budget(username,
+                                   token_budget=1800,
+                                   chunk_size=100,
+                                   min_length=10):
+    """
+    Stream newest‑first comments until adding another would exceed `token_budget`.
+    Returns a list of cleaned comment dicts.
+    """
+    reddit = praw.Reddit(
+        client_id=REDDIT_CLIENT_ID,
+        client_secret=REDDIT_CLIENT_SECRET,
+        user_agent=REDDIT_USER_AGENT
+    )
+    redditor = reddit.redditor(username)
+
+    comments_data = []
+    running_tkns = 0
+
+    for comment in redditor.comments.new(limit=None):   # unlimited stream
+        body_clean = clean_comment(comment.body or "")
+        if len(body_clean) < min_length:
+            continue
+
+        comment_cost = tokens_in(body_clean) + 7   # small padding for JSON / newline
+        if running_tkns + comment_cost > token_budget:
+            break   # would blow the limit
+
+        comments_data.append({
+            "body": body_clean,
+            "subreddit": comment.subreddit.display_name,
+            "created_utc": comment.created_utc
+        })
+        running_tkns += comment_cost
+
+        if len(comments_data) % chunk_size == 0:
+            print(f"[DEBUG] {len(comments_data)} comments, {running_tkns}/{token_budget} tokens")
+
+    print(f"[DEBUG] Final: {len(comments_data)} comments, {running_tkns}/{token_budget} tokens")
+    return comments_data, running_tkns
+
+
+
 def log_event(event_type, user_email, reddit_username=None):
     # event_type can be 'login' or 'usage'
     doc = {
@@ -170,15 +221,14 @@ def clean_comment(text):
 def extract_username_from_input(user_input):
     """
     Extracts a Reddit username from a direct username string or a Reddit URL.
-    Handles URLs like:
-    - https://www.reddit.com/u/username
-    - https://www.reddit.com/user/username/
-    - https://www.reddit.com/u/Trycheesecake/s/nM7PkcnmP5
     """
-    match = re.search(r'reddit\.com/(?:u|user)/([^/]+)', user_input)
+    # Match up to the next slash OR end of string
+    match = re.search(r'reddit\.com/(?:u|user)/([^/?#]+)', user_input)
     if match:
         return match.group(1)
-    return user_input
+    # If it's just a username without URL
+    return user_input.split("/")[0].strip()
+
 
 def fetch_comments(username, limit=150, min_length=10):
     """
@@ -350,7 +400,15 @@ def index():
             return redirect(url_for("index"))
         
         user_info = fetch_user_info(reddit_username)
-        comments = fetch_comments(reddit_username, limit=150)
+        # BEFORE
+        # comments = fetch_comments(reddit_username, limit=150)
+
+        # AFTER
+        comments, prompt_tokens = collect_comments_within_budget(
+            reddit_username,
+            token_budget=1800   # adjust if you change model / output length
+        )
+
         if not comments:
             flash("No valid comments found or an error occurred.", "warning")
             return redirect(url_for("index"))
@@ -378,6 +436,7 @@ def index():
         analysis = {
             "username": reddit_username,
             "total_comments_analyzed": len(comments),
+            "prompt_tokens": prompt_tokens,                 
             "frequent_subreddits": frequent_subreddits,
             "user_info": user_info,
             "summary": analysis_summary,

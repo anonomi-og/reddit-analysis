@@ -43,6 +43,7 @@
     <div class="mb-4">
       <h3>User Summary</h3>
       <ul class="list-group">
+        <li class="list-group-item"><strong>Total Tokens Sent:</strong> {{ analysis.prompt_tokens }}</li>
         <li class="list-group-item"><strong>Total Comments Analyzed:</strong> {{ analysis.total_comments_analyzed }}</li>
         {% if analysis.user_info %}
           <li class="list-group-item"><strong>Comment Karma:</strong> {{ analysis.user_info.comment_karma }}</li>

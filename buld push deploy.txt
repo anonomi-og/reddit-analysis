@@ -8,3 +8,17 @@ docker push europe-west1-docker.pkg.dev/reddit-stalk-450411/reddit-analyzer-repo
 
 Run
 gcloud run deploy reddit-analyzer --image=europe-west1-docker.pkg.dev/reddit-stalk-450411/reddit-analyzer-repo/reddit-analyzer:latest --platform=managed --region=europe-west1 --allow-unauthenticated
+
+
+
+Read Logs
+gcloud run services logs read reddit-analyzer --region=europe-west1
+
+
+
+
+
+Other Notes
+
+Flask version: 3.1.0
+Flask-Session version: 0.8.0
