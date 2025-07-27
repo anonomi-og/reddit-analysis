@@ -25,9 +25,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from google.cloud import firestore
 db = firestore.Client()
 
-import tiktoken   # <‑‑ new
-
-
+import tiktoken   
 
 MODEL = "gpt-3.5-turbo"   # keep a single source of truth
 enc = tiktoken.encoding_for_model(MODEL)
@@ -55,7 +53,12 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "default-secret-key")
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"  # Store sessions in a temporary file
-app.config["PREFERRED_URL_SCHEME"] = "https"
+if os.getenv("K_SERVICE"):
+    # In Cloud Run / production we enforce https URLs
+    app.config["PREFERRED_URL_SCHEME"] = "https"
+else:
+    # Local development typically uses plain http
+    app.config["PREFERRED_URL_SCHEME"] = "http"
 
 Session(app)  # Initialize the session
 
@@ -64,8 +67,10 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_CLIENT_ID = os.getenv("AUTH0_CLIENT_ID")
 AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET")
 
-# AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "http://localhost:8080/callback")   #local testing
-AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "https://reddit-analyzer-793334408726.europe-west1.run.app/callback")  #deployed
+AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL")
+# In Cloud Run we fall back to the known service URL if not explicitly set
+if not AUTH0_CALLBACK_URL and os.getenv("K_SERVICE"):
+    AUTH0_CALLBACK_URL = "https://reddit-analyzer-793334408726.europe-west1.run.app/callback"
 
 AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE", f"https://{AUTH0_DOMAIN}/userinfo")
 
@@ -100,8 +105,11 @@ def login():
     # Generate a secure random state token and store it in the session.
     state = secrets.token_urlsafe(16)
     session["oauth_state"] = state
-    # Pass the state to Auth0
-    return auth0.authorize_redirect(redirect_uri=AUTH0_CALLBACK_URL, state=state)
+    # Build the callback URL dynamically unless explicitly provided
+    callback_url = AUTH0_CALLBACK_URL or url_for(
+        "callback_handling", _external=True, _scheme=app.config["PREFERRED_URL_SCHEME"]
+    )
+    return auth0.authorize_redirect(redirect_uri=callback_url, state=state)
 
 @app.route("/callback")
 def callback_handling():
