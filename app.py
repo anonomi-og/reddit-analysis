@@ -50,15 +50,26 @@ app = Flask(__name__)
 app.session_cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "default-secret-key")
 
+# Detect environment
+IS_LOCAL = not os.getenv("K_SERVICE")  # True if not running on Cloud Run
+IS_PRODUCTION = os.getenv("K_SERVICE") is not None  # True if running on Cloud Run
+
+# Configure based on environment
+if IS_LOCAL:
+    app.config.update(
+        SESSION_COOKIE_SECURE=False,         # allow cookie over HTTP
+        SESSION_COOKIE_SAMESITE="Lax",       # sensible default for dev
+        SERVER_NAME="localhost:8080"         # stick to one host:port
+    )
+    os.environ["AUTHLIB_INSECURE_TRANSPORT"] = "true"  # let Authlib use HTTP
+    app.config["PREFERRED_URL_SCHEME"] = "http"
+else:
+    # In Cloud Run / production we enforce https URLs
+    app.config["PREFERRED_URL_SCHEME"] = "https"
+
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"  # Store sessions in a temporary file
-if os.getenv("K_SERVICE"):
-    # In Cloud Run / production we enforce https URLs
-    app.config["PREFERRED_URL_SCHEME"] = "https"
-else:
-    # Local development typically uses plain http
-    app.config["PREFERRED_URL_SCHEME"] = "http"
 
 Session(app)  # Initialize the session
 
@@ -67,55 +78,88 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 AUTH0_CLIENT_ID = os.getenv("AUTH0_CLIENT_ID")
 AUTH0_CLIENT_SECRET = os.getenv("AUTH0_CLIENT_SECRET")
 
-AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL")
-# In Cloud Run we fall back to the known service URL if not explicitly set
-if not AUTH0_CALLBACK_URL and os.getenv("K_SERVICE"):
-    AUTH0_CALLBACK_URL = "https://reddit-analyzer-793334408726.europe-west1.run.app/callback"
+# Environment-aware callback URL configuration
+if IS_LOCAL:
+    # For local development, use localhost callback
+    AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL_LOCAL", "http://localhost:8080/callback")
+else:
+    # For production, use the production callback URL
+    AUTH0_CALLBACK_URL = os.getenv("AUTH0_CALLBACK_URL", "https://reddit-analyzer-793334408726.europe-west1.run.app/callback")
+
+print(f"[DEBUG] Environment: {'LOCAL' if IS_LOCAL else 'PRODUCTION'}")
+print(f"[DEBUG] AUTH0_CALLBACK_URL: {AUTH0_CALLBACK_URL}")
 
 AUTH0_AUDIENCE = os.getenv("AUTH0_AUDIENCE", f"https://{AUTH0_DOMAIN}/userinfo")
-
-# Initialize OAuth and register Auth0
-oauth = OAuth(app)
-auth0 = oauth.register(
-    'auth0',
-    client_id=AUTH0_CLIENT_ID,
-    client_secret=AUTH0_CLIENT_SECRET,
-    api_base_url=f'https://{AUTH0_DOMAIN}',
-    access_token_url=f'https://{AUTH0_DOMAIN}/oauth/token',
-    authorize_url=f'https://{AUTH0_DOMAIN}/authorize',
-    client_kwargs={
-        'scope': 'openid profile email',
-    },
-    server_metadata_url=f'https://{AUTH0_DOMAIN}/.well-known/openid-configuration'
-)
-
 
 # --- Session-based Authentication Decorator ---
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
+        # Skip authentication in local development if desired
+        if IS_LOCAL and os.getenv("SKIP_AUTH_LOCAL", "false").lower() == "true":
+            # Create a mock user session for local development
+            if 'user' not in session:
+                session['user'] = {
+                    'jwt_payload': {'name': 'Local Dev User', 'email': 'dev@localhost'},
+                    'name': 'Local Dev User',
+                    'email': 'dev@localhost'
+                }
+            return f(*args, **kwargs)
+        
+        # Normal authentication flow
         if 'user' not in session:
             return redirect(url_for("login"))
         return f(*args, **kwargs)
     return decorated
 
+# Initialize OAuth and register Auth0 (only if not skipping auth locally)
+if not (IS_LOCAL and os.getenv("SKIP_AUTH_LOCAL", "false").lower() == "true"):
+    oauth = OAuth(app)
+    auth0 = oauth.register(
+        'auth0',
+        client_id=AUTH0_CLIENT_ID,
+        client_secret=AUTH0_CLIENT_SECRET,
+        api_base_url=f'https://{AUTH0_DOMAIN}',
+        access_token_url=f'https://{AUTH0_DOMAIN}/oauth/token',
+        authorize_url=f'https://{AUTH0_DOMAIN}/authorize',
+        client_kwargs={
+            'scope': 'openid profile email',
+        },
+        server_metadata_url=f'https://{AUTH0_DOMAIN}/.well-known/openid-configuration'
+    )
+
 # --- Auth0 Routes ---
 @app.route("/login")
 def login():
+    # If running locally and auth is skipped, redirect to dashboard
+    if IS_LOCAL and os.getenv("SKIP_AUTH_LOCAL", "false").lower() == "true":
+        # Create mock user session
+        session['user'] = {
+            'jwt_payload': {'name': 'Local Dev User', 'email': 'dev@localhost'},
+            'name': 'Local Dev User',
+            'email': 'dev@localhost'
+        }
+        return redirect(url_for("dashboard"))
+    
+    # Normal Auth0 flow
     # Generate a secure random state token and store it in the session.
     state = secrets.token_urlsafe(16)
     session["oauth_state"] = state
-    # Build the callback URL dynamically unless explicitly provided
-    callback_url = AUTH0_CALLBACK_URL or url_for(
-        "callback_handling", _external=True, _scheme=app.config["PREFERRED_URL_SCHEME"]
-    )
-    return auth0.authorize_redirect(redirect_uri=callback_url, state=state)
+    
+    return auth0.authorize_redirect(redirect_uri=AUTH0_CALLBACK_URL, state=state)
 
 @app.route("/callback")
 def callback_handling():
+    # If running locally and auth is skipped, this shouldn't be called
+    if IS_LOCAL and os.getenv("SKIP_AUTH_LOCAL", "false").lower() == "true":
+        return redirect(url_for("dashboard"))
+    
     # Retrieve the state from the query parameters and from the session.
     state_from_response = request.args.get("state")
     state_from_session = session.get("oauth_state")
+
+    print("DEBUG – state from session :", state_from_session)
+    print("DEBUG – state from response:", state_from_response)
     
     if not state_from_session or state_from_response != state_from_session:
         print("[ERROR] State mismatch: session state:", state_from_session, "response state:", state_from_response)
@@ -130,16 +174,23 @@ def callback_handling():
         'name': userinfo.get('name'),
         'email': userinfo.get('email')
     }
-    # Log the login event
-    log_event("login", session['user']['email'])
+    # Log the login event (only in production or if Firestore is available)
+    if IS_PRODUCTION:
+        log_event("login", session['user']['email'])
+    
     # Redirect to the dashboard instead of index
     return redirect(url_for("dashboard"))
 
-
 @app.route("/logout")
 def logout():
-    # Clear session and redirect to Auth0 logout endpoint
+    # Clear session
     session.clear()
+    
+    # If running locally and auth is skipped, just redirect to index
+    if IS_LOCAL and os.getenv("SKIP_AUTH_LOCAL", "false").lower() == "true":
+        return redirect(url_for("index"))
+    
+    # Normal Auth0 logout flow
     params = {'returnTo': url_for('index', _external=True), 'client_id': AUTH0_CLIENT_ID}
     return redirect(auth0.api_base_url + '/v2/logout?' + urlencode(params))
 
@@ -147,8 +198,6 @@ def logout():
 @requires_auth
 def dashboard():
     return render_template("dashboard.html")
-
-
 
 # --- Reddit API Credentials ---
 REDDIT_CLIENT_ID = os.getenv("REDDIT_CLIENT_ID")
@@ -198,9 +247,12 @@ def collect_comments_within_budget(username,
     print(f"[DEBUG] Final: {len(comments_data)} comments, {running_tkns}/{token_budget} tokens")
     return comments_data, running_tkns
 
-
-
 def log_event(event_type, user_email, reddit_username=None):
+    # Only log events in production to avoid Firestore issues in local dev
+    if not IS_PRODUCTION:
+        print(f"[DEBUG] Would log event: {event_type} for {user_email} (skipped in local dev)")
+        return
+    
     # event_type can be 'login' or 'usage'
     doc = {
         'user_email': user_email,
@@ -212,6 +264,11 @@ def log_event(event_type, user_email, reddit_username=None):
     db.collection("events").add(doc)
 
 def get_today_usage_count(user_email):
+    # In local development, return 0 to avoid Firestore issues
+    if not IS_PRODUCTION:
+        print(f"[DEBUG] Would check usage for {user_email} (returning 0 in local dev)")
+        return 0
+    
     # Get the start of the current UTC day
     now = datetime.now(timezone.utc)
     start_of_day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
@@ -243,7 +300,6 @@ def extract_username_from_input(user_input):
         return match.group(1)
     # If it's just a username without URL
     return user_input.split("/")[0].strip()
-
 
 def fetch_comments(username, limit=150, min_length=10):
     """
@@ -334,7 +390,7 @@ def build_prompt(user_info, comments):
 
 def call_llm_analysis(prompt):
     """
-    Call OpenAI’s ChatCompletion endpoint using the latest OpenAI API format.
+    Call OpenAI's ChatCompletion endpoint using the latest OpenAI API format.
     """
     try:
         print("[DEBUG] Calling LLM with the prompt.")
